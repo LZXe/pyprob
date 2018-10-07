@@ -82,8 +82,11 @@ def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir):
                 loaded+=1
                 new_trace= torch.load(file) #the file is already in .pt format and not need decompress
                 trace_cache.append(new_trace)
-                if (loaded %100==0):
-                    print (new_trace)
+                #if (loaded %100==0):
+                    #print (new_trace)
+                    #print (new_trace.length)
+                    #print (new_trace.samples)
+                    #print (new_trace.samples_replaced)
     traces = trace_cache[0:batch_size]
     #trace_cache[0:batch_size] = []
     print ('loaded :%d'%loaded)
@@ -102,13 +105,19 @@ if __name__ == "__main__":
    if (len(sys.argv)!=3):
         print ("args: batch_size, number_buckets")
         exit()
+   print (sys.argv)
    batch_size = int(sys.argv[1]) #1244
    num_bucket = int(sys.argv[2]) # must > 0
    if (num_bucket <1 or batch_size <0 or batch_size > 12440):
         print ('buckets [1-10], batch_size [1,12440]')
         exit()
    rdir='/global/cscratch1/sd/jialin/etalumis_data/etalumis_data_july30/trace_cache'
-   for i in range (num_bucket):
-        buckidx=np.random.randint(1,10,dtype='int')
+   #range_bk = range(1,10)
+   #print (range_bk)
+   print (num_bucket)
+   buckets_random =  random.sample(range(1,10), num_bucket)
+   for i in buckets_random:
+        #buckidx=np.random.randint(1,10,dtype='int')
+        buckidx = i
         benchmark(batch_size,buckidx,rdir)
         print ('done with bucket %d'%buckidx)

@@ -1,0 +1,21 @@
+"torch_load_bench.py" is a benchmark for PyTorch's load function, which is commonly used as:
+   torch.load(file)
+
+All functions related to load is simulated/copied into torch_load_bench, 
+making it a self-contained runnable benchmarks. 
+
+How To Run on Cori @NERSC
+ 1. module load python/3.6-anaconda-5.2
+ 2. source activate conda_notebook # The scripts for creating this conda env is not yet public
+
+io_kernel.py is a benchmark for Etalumis, where a few additional functions before torch.load 
+is defined/called. 
+
+The two benchmarks should report the IO cost only. The performance should be similar. 
+
+
+
+Date: Oct 6 2018
+Time: 6:41PM, PST
+Name: Jialin Liu
+Email: jalnliu@lbl.gov
