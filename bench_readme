@@ -5,8 +5,11 @@ All functions related to load is simulated/copied into torch_load_bench,
 making it a self-contained runnable benchmarks. 
 
 How To Run on Cori @NERSC
+ 0. salloc -N 1 -q interactive -C haswell -t 50
  1. module load python/3.6-anaconda-5.2
  2. source activate conda_notebook # The scripts for creating this conda env is not yet public
+ 3. python -m cProfile -o $profile_result test.py batch_size number_buckets
+ 4. gprof2dot -f pstats $profile_result | dot -Tpng -o test.png
 
 io_kernel.py is a benchmark for Etalumis, where a few additional functions before torch.load 
 is defined/called. 

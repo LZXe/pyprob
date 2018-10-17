@@ -81,6 +81,8 @@ def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir):
             for file in chosen_files:
                 loaded+=1
                 new_trace= torch.load(file) #the file is already in .pt format and not need decompress
+                new_file_name=file.split('/')[-1]+'_'+str(loaded)+'.pt'
+                torch.save(new_trace,new_file_name)
                 trace_cache.append(new_trace)
                 #if (loaded %100==0):
                     #print (new_trace)

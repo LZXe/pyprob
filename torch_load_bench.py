@@ -24,6 +24,8 @@ import tarfile
 import tempfile
 import warnings
 import time
+import torch._utils
+import cProfile
 from contextlib import closing, contextmanager
 if sys.version_info[0] == 2:
     import cPickle as pickle
@@ -144,21 +146,21 @@ def _cuda_deserialize(obj, location):
 register_package(10, _cpu_tag, _cpu_deserialize)
 register_package(20, _cuda_tag, _cuda_deserialize)
 
-def load_bench(f, map_location=None, pickle_module=pickle):
+def load_bench(fn, map_location=None, pickle_module=pickle):
     new_fd = False
-    if isinstance(f, str) or \
-            (sys.version_info[0] == 2 and isinstance(f, unicode)) or \
-            (sys.version_info[0] == 3 and isinstance(f, pathlib.Path)):
+    if isinstance(fn, str) or \
+            (sys.version_info[0] == 2 and isinstance(fn, unicode)) or \
+            (sys.version_info[0] == 3 and isinstance(fn, pathlib.Path)):
         new_fd = True
-        f = open(f, 'rb')
+        f = open(fn, 'rb')
     try:
-        return _load_bench(f, map_location, pickle_module)
+        return _load_bench(f,fn, map_location, pickle_module)
     finally:
         if new_fd:
             f.close()
 
 
-def _load_bench(f, map_location, pickle_module):
+def _load_bench(f, fn, map_location, pickle_module):
     deserialized_objects = {}
     if map_location is None:
         restore_location = default_restore_location
@@ -234,8 +236,9 @@ def _load_bench(f, map_location, pickle_module):
 
         with closing(tarfile.open(fileobj=f, mode='r:', format=tarfile.PAX_FORMAT)) as tar, \
                 mkdtemp() as tmpdir:
-
+            print('opened tar file with fileobj')
             tar.extract('storages', path=tmpdir)
+            #print ('opened tar file after storage extract')
             with open(os.path.join(tmpdir, 'storages'), 'rb', 0) as f:
                 num_storages = pickle_module.load(f)
                 for i in range(num_storages):
@@ -249,8 +252,9 @@ def _load_bench(f, map_location, pickle_module):
                 for target_cdata, root_cdata, offset, size in storage_views:
                     root = deserialized_objects[root_cdata]
                     deserialized_objects[target_cdata] = root[offset:offset + size]
-
+            print ('opened tar file after storage extract')
             tar.extract('tensors', path=tmpdir)
+            #print ('opened tar file after tensor extract')
             with open(os.path.join(tmpdir, 'tensors'), 'rb', 0) as f:
                 num_tensors = pickle_module.load(f)
                 for _ in range(num_tensors):
@@ -266,11 +270,12 @@ def _load_bench(f, map_location, pickle_module):
                     storage_offset, = struct.unpack('<q', f.read(8))
                     tensor = tensor_type().set_(storage, storage_offset, size, stride)
                     deserialized_objects[key] = tensor
-
+            print ('opened tar file after tensor extract')
             pickle_file = tar.extractfile('pickle')
             unpickler = pickle_module.Unpickler(pickle_file)
             unpickler.persistent_load = persistent_load
             result = unpickler.load()
+            print ('opened tar file after unpickler load')
             return result
 
     deserialized_objects = {}    
@@ -302,15 +307,23 @@ def _load_bench(f, map_location, pickle_module):
             raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
     _check_seekable(f)
     f_should_read_directly = _should_read_directly(f)
-
-    if f_should_read_directly and f.tell() == 0:
+#    try:
+#        t = tarfile.open(fn)
+#        t.close()
+#    except tarfile.TarError as e:
+#        print ('open tar file with name error:',e)
+#        pass
+    if f_should_read_directly and f.tell() == 0:# and tarfile.is_tarfile(fn):
         # legacy_load requires that f has fileno()
         # only if offset is zero we can attempt the legacy tar file loader
         try:
+            #print ('legacy_load:%s'%fn)
             return legacy_load(f)
         except tarfile.TarError:
+            #print ('open tar file with fileobj error is:',e)
             # if not a tarfile, reset file offset and proceed
             f.seek(0)
+    #print ('non legacy_load:%s'%fn)
     magic_number = pickle_module.load(f)
     if magic_number != MAGIC_NUMBER:
         raise RuntimeError("Invalid magic number; corrupt file?")
@@ -361,12 +374,16 @@ if __name__== "__main__":
                 loaded+=1
                 trace_cache.append(new_trace)
             except Exception as e:
-                print ('loading error:', e)
+                print ('loading error:')
         print ('done with bucket %d'%buckidx)
     end=time.time()
     print ('Loaded %d traces, %f bytes Time:%f seconds'%(loaded,sys.getsizeof(trace_cache), end-start))
-    sample_t = random.sample(range(1,loaded),1)[0]
-    print ('Sample trace:%d'%sample_t)
-    sample = trace_cache[sample_t]
-    print (sample)
-    print (sample.samples_observed)
+    
+    try:
+      sample_t = random.sample(range(1,loaded),1)[0]
+      print ('Sample trace:%d'%sample_t)
+      sample = trace_cache[sample_t]
+      print (sample)
+      print (sample.samples_observed)
+    except Exception as e:
+      print (e)
