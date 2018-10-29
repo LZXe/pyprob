@@ -22,6 +22,9 @@ from pyprob import util
 import pyarrow.plasma as plasma
 import pyarrow
 from mpi4py import MPI
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
 client = plasma.connect("/tmp/plasma","",0)
 #self._inference_network = None
 trace_cache_path = None
@@ -53,6 +56,7 @@ def use_trace_cache(trace_cache_path):
             num_files_per_bucket=num_files #each bucket has the same number of files
 
         print('Monitoring bucket folders under trace cache (currently with {} files) in {} buckets at {}'.format(count, num_buckets, trace_cache_path))
+        return num_files_per_bucket
         #trace_cache_path = trace_cache_path #base directory for traces
     else:#original code 
         trace_cache_path = trace_cache_path
@@ -67,20 +71,28 @@ def trace_cache_current_files(trace_cache_path):
             files.remove(discarded_file_name)
     return files
 
-def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir):
+def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir,rank=None):
     trace_cache_path=rootdir
-    use_trace_cache(trace_cache_path)
-    global UseBuckets,num_files_per_bucket,trace_cache
+    num_files_per_bucket = use_trace_cache(trace_cache_path)
+    trace_cache=[]
+    UseBuckets=True
     if UseBuckets:
         worldsize=1 # for serial version
         #dist.get_world_size() # for parallel version
         num_iter_per_bucket = int(num_files_per_bucket/(batch_size * worldsize))
     if bucket_idx is not None:
+        #if rank is not None: 
+        #   bucket_idx = int (rank % 10 +1)
+        if rank == 0: 
+           bucket_idx=3
+        if rank == 1: 
+           bucket_idx=4
         trace_cache_path = rootdir + '/bucket_' + str(bucket_idx)
     else: #validation set
         print('randomly pick one bucket for validation set')
         trace_cache_path = rootdir + '/bucket_' + str(random.randrange(10))
         print('trace_cache_path used for validation is {}'.format(trace_cache_path))
+    print ('rank:%d,path:%s'%(rank,trace_cache_path))
     if discard_source:
         trace_cache = []
     loaded=0
@@ -89,18 +101,29 @@ def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir):
             current_files = trace_cache_current_files(trace_cache_path)
                         #print("current_files number={}".format(len(current_files)))
                         #print("size={}".format(size))
+            print ('length of current files:%d,local batch:%d'%(len(current_files),batch_size))
             chosen_files= random.sample(current_files, batch_size)
             if discard_source:
                 trace_cache_discarded_file_names.extend(chosen_files)
-            global oid
+            #global oid
             for file in chosen_files:
                 loaded+=1
+                print ('file:%s'%file.split('/')[-1])
                 new_trace= torch.load(file) #the file is already in .pt format and not need decompress
                 #new_file_name=file.split('/')[-1]+'_'+str(loaded)+'.pt'
                 #torch.save(new_trace,new_file_name)
                 trace_cache.append(new_trace)
                 new_trace_pyarrow = pyarrow_obj(new_trace)
-                ioid = plasma_tsave(new_trace_pyarrow)
+                ioid=0
+                try:
+                   ioid = plasma_tsave(new_trace_pyarrow)
+                except Exception as e: 
+                   print ('error in plasma save:%s,file:%s'%(e,file.split('/')[-1]))
+                   list_traces()
+                   continue
+                if ioid ==0:
+                   list_traces()
+                   continue
                 print ('put object:%s'%ioid)
                 oid.append(ioid)
                 
@@ -114,7 +137,7 @@ def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir):
     print ('loaded :%d'%loaded)
     print ('bytes in memory:%f,%f'%(sys.getsizeof(traces), sys.getsizeof(trace_cache)))
     trace_cache[0:batch_size] = []
-    return traces, batch_size,sys.getsizeof(traces)
+    return traces, batch_size,sys.getsizeof(traces),oid
 def pyarrow_obj(traceobj):
     buf = pyarrow.serialize(traceobj,context=context).to_buffer()
     return buf
@@ -132,19 +155,24 @@ def plasma_tsave(traceobj):
     return object_id
 def list_traces():
     print (client.list())   
-def benchmark(batch_size,buckidx,rdir):
+def benchmark(batch_size,buckidx,rdir,rank=None,rank_check=None):
     import time
     start = time.time()
-    t,b,s=Pyprob_IO_Kernel(batch_size, buckidx, rdir)
+    buckidxx=rank % 10 # temorary solution to avoid collision
+    print ('rank:%d,bucket:%d'%(rank,buckidxx)) 
+    t,b,s,oids=Pyprob_IO_Kernel(batch_size, buckidxx, rdir,rank)
     end = time.time()
     print ('Number of traces loaded:%d, time:%f'%(batch_size,end-start))
-    print ('Trace 0:')
-    print (t[0])
-    trace1=copy.deepcopy(t[0])
-    print (asizeof.asizeof(trace1))
+    if rank==rank_check and rank is not None and rank_check is not None:
+       print ('Trace 0:')
+       print (t[0])
+       trace1=copy.deepcopy(t[0])
+       print (asizeof.asizeof(trace1))
+    return oids
 def plasma_tload(oid):
     data = client.get(oid)
     return data
+
 if __name__ == "__main__":
    if (len(sys.argv)!=3):
         print ("args: batch_size, number_buckets")
@@ -158,18 +186,30 @@ if __name__ == "__main__":
    rdir='/global/cscratch1/sd/jialin/etalumis_data/etalumis_data_july30/trace_cache'
    #range_bk = range(1,10)
    #print (range_bk)
-   print (num_bucket)
+   print ('number of buckets:%d'%num_bucket)
+   print ('number of ranks:%d'%(size))
+   local_batch = int(batch_size/size) # e.g., global batch is 1024, mpi rank is 32, then local batch is 32
+   print ('local batch:%d'%local_batch)
    buckets_random =  random.sample(range(1,10), num_bucket)
+   x=0
+   y=size/2
    for i in buckets_random:
         #buckidx=np.random.randint(1,10,dtype='int')
         buckidx = i
-        benchmark(batch_size,buckidx,rdir)
+        oids=benchmark(local_batch,buckidx,rdir,rank, y)
         print ('done with bucket %d'%buckidx)
    #list_traces()
-   data = plasma_tload(oid[0])
-   print ('get obj:%s'%oid[0])
-   print (data)
-   buf = context.deserialize(data)
-   print (buf)
-   buf1=copy.deepcopy(buf)
-   print (asizeof.asizeof(buf1))
+   # load one object from rank x to rank y
+   print ('loading one object from rank %d to rank %d'%(y,x))
+   #data = plasma_tload(oid[0],x,y)
+   if rank==y:
+      comm.send(oid,dest=x)
+   elif rank==x:
+      oid_y = comm.recv(source=y)   
+      data = plasma_tload(oid_y[0])
+      print ('get obj:%s'%oid_y[0])
+      print (data)
+      buf = context.deserialize(data)
+      print (buf)
+      buf1=copy.deepcopy(buf)
+      print (asizeof.asizeof(buf1))
