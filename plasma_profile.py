@@ -10,6 +10,8 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
 import cProfile
 import random
+import copy
+from pympler import asizeof
 #name = name
 from pyprob.trace import Sample
 from pyprob.trace import Trace
@@ -19,6 +21,7 @@ from pyprob.distributions import Poisson
 from pyprob import util
 import pyarrow.plasma as plasma
 import pyarrow
+import mpi4py as MPI
 client = plasma.connect("/tmp/plasma","",0)
 #self._inference_network = None
 trace_cache_path = None
@@ -114,116 +117,16 @@ def Pyprob_IO_Kernel(batch_size, bucket_idx, rootdir):
     return traces, batch_size,sys.getsizeof(traces)
 def pyarrow_obj(traceobj):
     buf = pyarrow.serialize(traceobj,context=context).to_buffer()
-    #buf = pyarrow.serialize(traceobj).to_buffer()
     return buf
-def _serialize_Trace(val):
-    return {
-                                   'samples':val.samples,
-                      'samples_uncontrolled':val.samples_uncontrolled,
-                          'samples_replaced':val.samples_replaced,
-                          'samples_observed':val.samples_observed,
-                              '_samples_all':val._samples_all,
-                 '_samples_all_dict_address':val._samples_all_dict_address,
-            '_samples_all_dict_address_base':val._samples_all_dict_address_base,
-                                    'result':val.result,
-                                  'log_prob':val.log_prob,
-                         'log_prob_observed':val.log_prob_observed,
-                     'log_importance_weight':val.log_importance_weight,
-                                    'length':val.length
-           }
 
-def _deserialize_Trace(data):
-
-    return Trace(data['samples'],
-                 data['samples_uncontrolled'],
-                 data['samples_replaced'],
-                 data['samples_observed'],
-                 data['_samples_all'],
-                 data['_samples_all_dict_address'],
-                 data['_samples_all_dict_address_base'],
-                 data['result'],
-                 data['log_prob'], 
-                 data['log_prob_observed'],
-                 data['log_importance_weight'],
-                 data['length'])
-
-def _serialize_Sample(val):
-    
-    return {'address_base': val.address_base, 
-                 'address': val.address, 
-            'distribution': val.distribution,
-                'instance': val.instance, 
-                   'value': val.value,
-                 'control': val.control,
-                 'replace': val.replace,
-                'observed': val.observed,
-                  'reused': val.reused,
-                'log_prob': val.log_prob}#,
-              #'lstm_input': val.lstm_input,
-             #'lstm_output': val.lstm_output}
-
-def _deserialize_Sample(data):    
-    return Sample(data['distribution'],
-                  data['value'],
-                  data['address_base'], 
-                  data['address'],
-                  data['instance'],
-                  data['log_prob'],
-                  data['control'],
-                  data['replace'],
-                  data['observed'],
-                  data['reused'])#,
-                  #data['lstm_input'],
-                  #data['lstm_output'])
-
-def _deserialize_Tensor(serialized_obj):
-    return torch.from_numpy(serialized_obj).cpu()
-def _serialize_Tensor(obj):
-    return obj.cpu().numpy()
-def _serialize_Uniform(obj):
-    return {'low':util.to_variable(obj.low),
-            'high':util.to_variable(obj.high)
-            }
-    #return {'low':util.to_tensor(obj.low), 
-    #        'high':util.to_tensor(obj.high)
-    #        }
-def _deserialize_Uniform(data):
-       return Uniform(data['low'],data['high'])
-def _serialize_Categorical(obj):
-    #if hasattr('obj','probs') and hasattr('obj','logits'):
-    #    return {'probs':obj.probs,
-    #        'logits':obj.logits
-    #       }
-    #else:
-    #     return None
-    return {'_probs':util.to_variable(obj._probs)}
-def _deserialize_Categorical(data):
-    #return Categorical(data['probs'],data['logits'])
-    return Categorical(data['_probs'])
-def _serialize_Poisson(obj):
-    return {'rate':util.to_variable(obj.rate)}
-def _deserialize_Poisson(data):
-    return Poisson(data['rate'])
 context = pyarrow.SerializationContext()
 context.register_type(Sample, 'Sample',pickle=True)
-#                      custom_serializer=_serialize_Sample,
-#                      custom_deserializer = _deserialize_Sample)
-
 context.register_type(Trace, 'Trace',pickle=True)
-#                      custom_serializer = _serialize_Trace,
-#                      custom_deserializer = _deserialize_Trace)
 context.register_type(torch.Tensor, 'torch.Tensor',pickle=True)
-#                      custom_serializer = _serialize_Tensor,
-#                      custom_deserializer = _deserialize_Tensor)
 context.register_type(Uniform, 'Uniform',pickle=True)
-#                      custom_serializer = _serialize_Uniform,
-#                      custom_deserializer = _deserialize_Uniform)
 context.register_type(Categorical, 'Categorical',pickle=True)
-#                      custom_serializer = _serialize_Categorical,
-#                      custom_deserializer = _deserialize_Categorical)
 context.register_type(Poisson,'Poisson',pickle=True)
-#                      custom_serializer = _serialize_Poisson,
-#                      custom_deserializer = _deserialize_Poisson)
+
 def plasma_tsave(traceobj):
     object_id = client.put(traceobj)
     return object_id
@@ -237,6 +140,8 @@ def benchmark(batch_size,buckidx,rdir):
     print ('Number of traces loaded:%d, time:%f'%(batch_size,end-start))
     print ('Trace 0:')
     print (t[0])
+    trace1=copy.deepcopy(t[0])
+    print (asizeof.asizeof(trace1))
 def plasma_tload(oid):
     data = client.get(oid)
     return data
@@ -266,3 +171,5 @@ if __name__ == "__main__":
    print (data)
    buf = context.deserialize(data)
    print (buf)
+   buf1=copy.deepcopy(buf)
+   print (asizeof.asizeof(buf1))
